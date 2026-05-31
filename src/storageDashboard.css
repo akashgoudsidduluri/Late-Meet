@@ -176,3 +176,39 @@
   color: var(--color-text-secondary);
   padding: 16px 0;
 }
+
+.storage-card-controls .storage-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn {
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.btn-danger {
+  color: var(--color-text-danger);
+}
+
+.btn-warning {
+  color: var(--color-text-warning, #b36b00);
+}
+
+.visually-hidden {
+  position: absolute !important;
+  height: 1px;
+  width: 1px;
+  overflow: hidden;
+  clip: rect(1px, 1px, 1px, 1px);
+  white-space: nowrap;
+}
+
+.storage-meeting-select input[type="checkbox"] {
+  margin-right: 8px;
+}
