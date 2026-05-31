@@ -1635,6 +1635,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Keyboard Shortcut Commands
+async function forceSummarizeTranscript() {
+  if (state.transcript.length === 0) {
+    console.warn("[LateMeet] No transcript available for catch-up summarization.");
+    return;
+  }
+
+  if (summaryInFlight) {
+    console.log("[LateMeet] Summarization already in progress; skipping catch-up command.");
+    return;
+  }
+
+  const previousIsActive = state.isActive;
+  try {
+    if (!state.isActive) {
+      state.isActive = true;
+    }
+    state.lastSummarizedAt = 0;
+    await summarizeTranscriptIfNeeded();
+    await broadcastStateUpdate(true);
+  } catch (err) {
+    console.error("[LateMeet] Catch me up command failed:", err);
+  } finally {
+    if (!previousIsActive) {
+      state.isActive = previousIsActive;
+    }
+  }
+}
+
 chrome.commands.onCommand.addListener(async (command) => {
   await hydrateState();
   try {
@@ -1658,6 +1686,18 @@ chrome.commands.onCommand.addListener(async (command) => {
       if (activeTab?.id) {
         await chrome.sidePanel.open({ tabId: activeTab.id });
       }
+      return;
+    }
+
+    if (command === "generate-catch-me-up") {
+      await forceSummarizeTranscript();
+      return;
+    }
+
+    if (command === "save-session") {
+      await persistSession();
+      await broadcastStateUpdate(true);
+      return;
     }
   } catch (err) {
     console.error("[LateMeet] Keyboard command failed:", command, err);
