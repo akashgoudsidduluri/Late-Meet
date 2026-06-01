@@ -82,6 +82,33 @@ async function persistActionStatuses() {
   }
 }
 
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && changes.actionItemStatuses) {
+    const newVal = changes.actionItemStatuses.newValue;
+    if (newVal && typeof newVal === "object") {
+      for (const [k, v] of Object.entries(newVal)) {
+        actionStatuses.set(k, Boolean(v));
+      }
+
+      const checkboxes = document.querySelectorAll<HTMLInputElement>(".action-checkbox");
+      checkboxes.forEach((cb) => {
+        const meetId = cb.dataset.meetingId || currentMeetingId;
+        const taskText = cb.dataset.task || "";
+        const key = buildActionStatusKey(meetId, taskText);
+        const isDone = actionStatuses.get(key) === true;
+
+        if (cb.checked !== isDone) {
+          cb.checked = isDone;
+          const wrapper = cb.closest(".action-item");
+          const taskDiv = wrapper?.querySelector(".action-task");
+          wrapper?.classList.toggle("action-item--done", isDone);
+          taskDiv?.classList.toggle("action-task--done", isDone);
+        }
+      });
+    }
+  }
+});
+
 document.addEventListener("DOMContentLoaded", async () => {
   // ——— Transcript Search DOM Elements (Queried early to prevent TDZ) ———
   const searchInput = document.getElementById("transcript-search-input") as HTMLInputElement | null;
@@ -529,7 +556,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       neutral: { width: "50%", text: "Neutral 😐", color: "#94A3B8" },
       mixed: { width: "55%", text: "Mixed 🤔", color: "#FBBF24" },
     };
-    const s = map[sentiment] || map.neutral;
+    const normalizedSentiment = (sentiment || "").toLowerCase();
+    const s = map[normalizedSentiment] || map.neutral;
     if (fill) fill.style.width = s.width;
     if (label) {
       label.textContent = s.text;
@@ -1075,22 +1103,74 @@ document.addEventListener("DOMContentLoaded", async () => {
   const exportBtn = document.getElementById("export-btn") as HTMLButtonElement;
   const exportDropdown = document.getElementById("export-dropdown") as HTMLDivElement;
 
+  function openExportDropdown() {
+    exportDropdown.removeAttribute("hidden");
+    exportBtn.setAttribute("aria-expanded", "true");
+    const firstItem = exportDropdown.querySelector('[role="menuitem"]') as HTMLElement | null;
+    firstItem?.focus();
+  }
+
+  function closeExportDropdown(returnFocus = true) {
+    exportDropdown.setAttribute("hidden", "");
+    exportBtn.setAttribute("aria-expanded", "false");
+    if (returnFocus) exportBtn.focus();
+  }
+
   exportBtn?.addEventListener("click", () => {
     const isHidden = exportDropdown.hasAttribute("hidden");
     if (isHidden) {
-      exportDropdown.removeAttribute("hidden");
-      exportBtn.setAttribute("aria-expanded", "true");
+      openExportDropdown();
     } else {
-      exportDropdown.setAttribute("hidden", "");
-      exportBtn.setAttribute("aria-expanded", "false");
+      closeExportDropdown(false);
+    }
+  });
+
+  exportBtn?.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      if (exportDropdown.hasAttribute("hidden")) {
+        e.preventDefault();
+        openExportDropdown();
+      }
+    }
+  });
+
+  exportDropdown?.addEventListener("keydown", (e: KeyboardEvent) => {
+    const items = Array.from(exportDropdown.querySelectorAll('[role="menuitem"]')) as HTMLElement[];
+    const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+
+    switch (e.key) {
+      case "Escape":
+        e.preventDefault();
+        closeExportDropdown();
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        items[(currentIndex + 1) % items.length]?.focus();
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        items[(currentIndex - 1 + items.length) % items.length]?.focus();
+        break;
+      case "Home":
+        e.preventDefault();
+        items[0]?.focus();
+        break;
+      case "End":
+        e.preventDefault();
+        items.at(-1)?.focus();
+        break;
+      case "Tab":
+        closeExportDropdown(false);
+        break;
+      default:
+        break;
     }
   });
 
   document.addEventListener("click", (e: MouseEvent) => {
     const wrapper = document.getElementById("export-wrapper");
     if (wrapper && !wrapper.contains(e.target as Node)) {
-      exportDropdown?.setAttribute("hidden", "");
-      exportBtn?.setAttribute("aria-expanded", "false");
+      closeExportDropdown(false);
     }
   });
 

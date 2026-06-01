@@ -13,6 +13,7 @@ import {
   StoredSession,
 } from "./sessionStorage";
 import { AudioChunkQueue, AudioChunkQueueItem } from "./audioChunkQueue";
+import { createAudioCaptureStopPlan } from "./audioCaptureLifecycle";
 import { normalizeActiveSpeakerName, resolveTranscriptSpeaker } from "./speakerAttribution";
 import { getMeetingIdFromUrl } from "./meetingTabs";
 import { getOpenAiApiKey, getElevenLabsApiKey } from "./utils/credentials";
@@ -1367,6 +1368,7 @@ async function stopAudioCapture(reason = "Stopped") {
     return;
   }
   isStoppingAudio = true;
+  const stopPlan = createAudioCaptureStopPlan(state.audioActive);
   try {
     try {
       await chrome.runtime.sendMessage({ type: "OFFSCREEN_STOP_CAPTURE" });
@@ -1374,7 +1376,7 @@ async function stopAudioCapture(reason = "Stopped") {
       // Ignore if offscreen not running
     }
 
-    if (state.audioActive) {
+    if (stopPlan.shouldSavePendingSession) {
       addTimeline(`Meeting ended (${reason})`);
       await savePendingSession();
     }
@@ -1385,10 +1387,12 @@ async function stopAudioCapture(reason = "Stopped") {
     await chrome.storage.local.remove("activeMeetingState");
     await broadcastStateUpdate(true);
 
-    try {
-      await chrome.runtime.sendMessage({ type: "SESSION_ENDED" });
-    } catch {
-      // no listeners
+    if (stopPlan.shouldNotifySessionEnded) {
+      try {
+        await chrome.runtime.sendMessage({ type: "SESSION_ENDED" });
+      } catch {
+        // no listeners
+      }
     }
 
     await closeOffscreenDocumentIfPresent();
@@ -1635,6 +1639,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Keyboard Shortcut Commands
+async function forceSummarizeTranscript() {
+  if (state.transcript.length === 0) {
+    console.warn("[LateMeet] No transcript available for catch-up summarization.");
+    return;
+  }
+
+  if (summaryInFlight) {
+    console.log("[LateMeet] Summarization already in progress; skipping catch-up command.");
+    return;
+  }
+
+  const previousIsActive = state.isActive;
+  try {
+    if (!state.isActive) {
+      state.isActive = true;
+    }
+    state.lastSummarizedAt = 0;
+    await summarizeTranscriptIfNeeded();
+    await broadcastStateUpdate(true);
+  } catch (err) {
+    console.error("[LateMeet] Catch me up command failed:", err);
+  } finally {
+    if (!previousIsActive) {
+      state.isActive = previousIsActive;
+    }
+  }
+}
+
 chrome.commands.onCommand.addListener(async (command) => {
   await hydrateState();
   try {
@@ -1658,6 +1690,18 @@ chrome.commands.onCommand.addListener(async (command) => {
       if (activeTab?.id) {
         await chrome.sidePanel.open({ tabId: activeTab.id });
       }
+      return;
+    }
+
+    if (command === "generate-catch-me-up") {
+      await forceSummarizeTranscript();
+      return;
+    }
+
+    if (command === "save-session") {
+      await persistSession();
+      await broadcastStateUpdate(true);
+      return;
     }
   } catch (err) {
     console.error("[LateMeet] Keyboard command failed:", command, err);
@@ -1687,9 +1731,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab?.id) return;
 
   const isMeetTab = isMeetHostname(tab.url);
-  const meetingId = isMeetTab
-    ? (tab.url?.match(/meet\.google\.com\/([a-z-]+)/)?.[1] ?? null)
-    : null;
+  const meetingId = getMeetingIdFromUrl(tab.url);
   const meetingUrl = tab.url || null;
 
   if (!state.audioActive) {
