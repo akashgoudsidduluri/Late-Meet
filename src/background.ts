@@ -6,6 +6,7 @@ import {
   deleteSavedMeetingSession,
   discardPendingMeetingSession,
   getSavedMeetingSessions,
+  getSavedMeetingSession,
   isStorageQuotaError,
   persistMeetingSession,
   persistPendingMeetingSession,
@@ -13,6 +14,7 @@ import {
   StoredSession,
 } from "./sessionStorage";
 import { AudioChunkQueue, AudioChunkQueueItem } from "./audioChunkQueue";
+import { createAudioCaptureStopPlan } from "./audioCaptureLifecycle";
 import { normalizeActiveSpeakerName, resolveTranscriptSpeaker } from "./speakerAttribution";
 import { getMeetingIdFromUrl } from "./meetingTabs";
 import { getOpenAiApiKey, getElevenLabsApiKey } from "./utils/credentials";
@@ -363,6 +365,7 @@ function snapshot() {
     startTime: state.startTime,
     duration: getDuration(),
     summary: state.summary,
+    summaryItems: state.summaryItems,
     topics: state.topics,
     decisions: state.decisions,
     actionItems: state.actionItems,
@@ -1177,6 +1180,7 @@ async function savePendingSession() {
     ...snapshot(),
     savedAt: Date.now(),
     isActive: false,
+    summaryItems: snapshot().summaryItems, // Explicitly ensure summaryItems is present
   };
 
   inMemoryPendingSession = session;
@@ -1367,6 +1371,7 @@ async function stopAudioCapture(reason = "Stopped") {
     return;
   }
   isStoppingAudio = true;
+  const stopPlan = createAudioCaptureStopPlan(state.audioActive);
   try {
     try {
       await chrome.runtime.sendMessage({ type: "OFFSCREEN_STOP_CAPTURE" });
@@ -1374,7 +1379,7 @@ async function stopAudioCapture(reason = "Stopped") {
       // Ignore if offscreen not running
     }
 
-    if (state.audioActive) {
+    if (stopPlan.shouldSavePendingSession) {
       addTimeline(`Meeting ended (${reason})`);
       await savePendingSession();
     }
@@ -1385,10 +1390,12 @@ async function stopAudioCapture(reason = "Stopped") {
     await chrome.storage.local.remove("activeMeetingState");
     await broadcastStateUpdate(true);
 
-    try {
-      await chrome.runtime.sendMessage({ type: "SESSION_ENDED" });
-    } catch {
-      // no listeners
+    if (stopPlan.shouldNotifySessionEnded) {
+      try {
+        await chrome.runtime.sendMessage({ type: "SESSION_ENDED" });
+      } catch {
+        // no listeners
+      }
     }
 
     await closeOffscreenDocumentIfPresent();
@@ -1616,6 +1623,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      case "GET_SAVED_SESSION": {
+        const session =
+          typeof message.sessionId === "string"
+            ? await getSavedMeetingSession(chrome.storage.local, message.sessionId)
+            : null;
+        sendResponse(session);
+        return;
+      }
+
       case "DELETE_SAVED_SESSION": {
         await deleteSavedMeetingSession(chrome.storage.local, message.sessionId);
         sendResponse({ success: true });
@@ -1714,8 +1730,21 @@ function createContextMenu() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
   createContextMenu();
+  try {
+    const vals = await chrome.storage.local.get(["onboardingCompleted"]);
+    if (!vals?.onboardingCompleted) {
+      const url = chrome.runtime.getURL("src/options.html?onboarding=1");
+      try {
+        await chrome.tabs.create({ url });
+      } catch (e) {
+        console.warn("[LateMeet] Could not open onboarding tab on install:", e);
+      }
+    }
+  } catch (e) {
+    console.warn("[LateMeet] onInstalled storage check failed:", e);
+  }
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -1727,9 +1756,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab?.id) return;
 
   const isMeetTab = isMeetHostname(tab.url);
-  const meetingId = isMeetTab
-    ? (tab.url?.match(/meet\.google\.com\/([a-z-]+)/)?.[1] ?? null)
-    : null;
+  const meetingId = getMeetingIdFromUrl(tab.url);
   const meetingUrl = tab.url || null;
 
   if (!state.audioActive) {

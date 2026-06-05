@@ -120,7 +120,6 @@ function buildBreakdownCard(label: string, bytes: number, total: number, color: 
 }
 
 function attachEventListeners(container: HTMLElement): void {
-  // Individual delete buttons
   container.querySelectorAll(".storage-delete-btn").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       const id = (e.target as HTMLElement).dataset.id!;
@@ -128,6 +127,7 @@ function attachEventListeners(container: HTMLElement): void {
         (e.target as HTMLElement)
           .closest(".storage-meeting-item")
           ?.querySelector(".storage-meeting-title")?.textContent || id;
+
       if (confirm(`Delete stored data for "${title}"? This cannot be undone.`)) {
         try {
           await deleteSavedMeetingSession(chrome.storage.local, id);
